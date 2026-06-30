@@ -10,8 +10,8 @@ Run with:  uvicorn main:app --reload
 
 from functools import lru_cache
 
-import requests
 import yfinance as yf
+from curl_cffi import requests as cffi_requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -25,6 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Yahoo Finance fingerprints and blocks plain Python `requests` traffic.
+# curl_cffi impersonates a real Chrome TLS/HTTP signature, which yfinance
+# (and our own /api/search call below) both lean on to stay reliable.
+_yf_session = cffi_requests.Session(impersonate="chrome")
+
 # Map a UI range button to a yfinance (period, interval) pair.
 RANGES = {
     "1D": ("1d", "5m"),
@@ -37,7 +42,7 @@ RANGES = {
 
 
 def _ticker(symbol: str) -> yf.Ticker:
-    return yf.Ticker(symbol.upper().strip())
+    return yf.Ticker(symbol.upper().strip(), session=_yf_session)
 
 
 @lru_cache(maxsize=256)
@@ -57,10 +62,9 @@ def search(q: str):
     if len(q) < 1:
         return {"results": []}
     try:
-        resp = requests.get(
+        resp = _yf_session.get(
             "https://query2.finance.yahoo.com/v1/finance/search",
             params={"q": q, "quotesCount": 8, "newsCount": 0},
-            headers={"User-Agent": "Mozilla/5.0"},
             timeout=8,
         )
         resp.raise_for_status()
