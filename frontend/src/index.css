@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --color-term-bg: #000000;
+  --color-term-panel: #141414;
+  --color-term-border: #2b2b2b;
+  --color-term-muted: #9b9b9b;
+  --color-term-up: #06c167;
+  --color-term-down: #e11900;
+  --color-term-accent: #06c167;
+  --font-mono: "Uber Move", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Light mode: pure white, grey/black text, monochrome candles. */
+[data-theme="light"] {
+  --color-term-bg: #ffffff;
+  --color-term-panel: #f6f6f6;
+  --color-term-border: #e0e0e0;
+  --color-term-muted: #6e6e6e;
+  --color-term-up: #404040;
+  --color-term-down: #000000;
+  --color-term-accent: #000000;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-term-bg);
+  color: #ffffff;
+  font-family: "Uber Move", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+  transition: background-color 0.15s ease;
+}
+
+[data-theme="light"] body {
+  color: #1a1a1a;
+}
+
+.font-display {
+  font-family: "Plus Jakarta Sans", "Uber Move", ui-sans-serif, -apple-system, sans-serif;
+}
+
+/* Subtle scrollbars that match the dark theme. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-term-border);
+  border-radius: 4px;
+}
