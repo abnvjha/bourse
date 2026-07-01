@@ -34,6 +34,25 @@ RANGES = {
 # Browser-impersonating session — avoids Yahoo's bot detection.
 _session = cffi_requests.Session(impersonate="chrome")
 
+# Yahoo's blocking isn't perfectly consistent across browser signatures,
+# so for the heavier .info call we retry with a couple of different
+# impersonation profiles before giving up.
+_INFO_PROFILES = ["chrome", "chrome124", "safari"]
+
+
+@lru_cache(maxsize=256)
+def _info_with_fallback(symbol: str) -> dict:
+    for profile in _INFO_PROFILES:
+        try:
+            sess = cffi_requests.Session(impersonate=profile)
+            t = yf.Ticker(symbol.upper().strip(), session=sess)
+            info = t.info
+            if info and (info.get("longBusinessSummary") or info.get("trailingPE") or info.get("sector")):
+                return info
+        except Exception:
+            continue
+    return {}
+
 
 def _ticker(symbol: str) -> yf.Ticker:
     return yf.Ticker(symbol.upper().strip(), session=_session)
@@ -89,13 +108,9 @@ def stock(symbol: str):
     change = (price - prev) if (price and prev) else None
     pct = (change / prev * 100) if (change is not None and prev) else None
 
-    # .info has richer fundamentals but hits a heavier endpoint.
-    # Wrap it so a block/failure degrades to showing price only.
-    info = {}
-    try:
-        info = t.info or {}
-    except Exception:
-        info = {}
+    # .info has richer fundamentals but hits a heavier, more-blocked endpoint.
+    # Try a few browser signatures before giving up gracefully.
+    info = _info_with_fallback(symbol)
 
     return {
         "symbol": symbol.upper(),
