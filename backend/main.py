@@ -6,6 +6,7 @@ browser-impersonation to avoid bot-blocking. Exposes clean JSON
 endpoints for the React frontend.
 """
 
+import time
 from functools import lru_cache
 
 import yfinance as yf
@@ -30,6 +31,25 @@ RANGES = {
     "1Y": ("1y", "1d"),
     "5Y": ("5y", "1wk"),
 }
+
+# --- Simple in-memory TTL cache -------------------------------------------
+# Yahoo's free endpoints rate-limit aggressively. Caching each response for
+# a short window means repeat requests for the same symbol (very common —
+# every reload, every watchlist refresh) don't re-hit Yahoo at all.
+_cache: dict[str, tuple[float, dict]] = {}
+
+
+def cached(key: str, ttl: int, fetch):
+    now = time.time()
+    hit = _cache.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    value = fetch()
+    _cache[key] = (now, value)
+    return value
+
+
+# ---------------------------------------------------------------------------
 
 # Browser-impersonating session — avoids Yahoo's bot detection.
 _session = cffi_requests.Session(impersonate="chrome")
@@ -63,133 +83,146 @@ def search(q: str):
     q = q.strip()
     if len(q) < 1:
         return {"results": []}
-    try:
-        resp = _session.get(
-            "https://query2.finance.yahoo.com/v1/finance/search",
-            params={"q": q, "quotesCount": 8, "newsCount": 0},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        quotes = resp.json().get("quotes", [])
-    except Exception:
-        return {"results": []}
 
-    results = []
-    for item in quotes:
-        symbol = item.get("symbol")
-        if not symbol or item.get("quoteType") not in {"EQUITY", "ETF", "INDEX"}:
-            continue
-        results.append({
-            "symbol": symbol,
-            "name": item.get("shortname") or item.get("longname") or symbol,
-            "exchange": item.get("exchDisp", ""),
-            "type": item.get("quoteType", ""),
-        })
-    return {"results": results}
+    def fetch():
+        try:
+            resp = _session.get(
+                "https://query2.finance.yahoo.com/v1/finance/search",
+                params={"q": q, "quotesCount": 8, "newsCount": 0},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            quotes = resp.json().get("quotes", [])
+        except Exception:
+            return {"results": []}
+
+        results = []
+        for item in quotes:
+            symbol = item.get("symbol")
+            if not symbol or item.get("quoteType") not in {"EQUITY", "ETF", "INDEX"}:
+                continue
+            results.append({
+                "symbol": symbol,
+                "name": item.get("shortname") or item.get("longname") or symbol,
+                "exchange": item.get("exchDisp", ""),
+                "type": item.get("quoteType", ""),
+            })
+        return {"results": results}
+
+    return cached(f"search:{q.lower()}", 30, fetch)
 
 
 @app.get("/api/stock/{symbol}")
 def stock(symbol: str):
-    t = _ticker(symbol)
+    def fetch():
+        t = _ticker(symbol)
 
-    # fast_info hits a lighter Yahoo endpoint — much less likely to be blocked.
-    try:
-        fi = t.fast_info
-        price = fi.last_price
-        prev = fi.previous_close
-        currency = fi.currency
-        market_cap = getattr(fi, "market_cap", None)
-    except Exception as e:
-        raise HTTPException(404, f"Could not fetch data for '{symbol}': {e}")
+        # fast_info hits a lighter Yahoo endpoint — much less likely to be blocked.
+        try:
+            fi = t.fast_info
+            price = fi.last_price
+            prev = fi.previous_close
+            currency = fi.currency
+            market_cap = getattr(fi, "market_cap", None)
+        except Exception as e:
+            raise HTTPException(404, f"Could not fetch data for '{symbol}': {e}")
 
-    if not price:
-        raise HTTPException(404, f"No data found for '{symbol}'. Check the ticker.")
+        if not price:
+            raise HTTPException(404, f"No data found for '{symbol}'. Check the ticker.")
 
-    change = (price - prev) if (price and prev) else None
-    pct = (change / prev * 100) if (change is not None and prev) else None
+        change = (price - prev) if (price and prev) else None
+        pct = (change / prev * 100) if (change is not None and prev) else None
 
-    # .info has richer fundamentals but hits a heavier, more-blocked endpoint.
-    # Try a few browser signatures before giving up gracefully.
-    info = _info_with_fallback(symbol)
+        # .info has richer fundamentals but hits a heavier, more-blocked endpoint.
+        # Try a few browser signatures before giving up gracefully.
+        info = _info_with_fallback(symbol)
 
-    return {
-        "symbol": symbol.upper(),
-        "name": info.get("shortName") or info.get("longName") or symbol.upper(),
-        "exchange": info.get("fullExchangeName") or info.get("exchange") or getattr(fi, "exchange", ""),
-        "currency": currency or info.get("currency", "USD"),
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "website": info.get("website"),
-        "summary": info.get("longBusinessSummary"),
-        "price": price,
-        "previousClose": prev,
-        "change": change,
-        "changePct": pct,
-        "dayLow": getattr(fi, "day_low", None),
-        "dayHigh": getattr(fi, "day_high", None),
-        "fiftyTwoWeekLow": getattr(fi, "year_low", None),
-        "fiftyTwoWeekHigh": getattr(fi, "year_high", None),
-        "fundamentals": {
-            "Market Cap": market_cap or info.get("marketCap"),
-            "P/E (TTM)": info.get("trailingPE"),
-            "Forward P/E": info.get("forwardPE"),
-            "EPS (TTM)": info.get("trailingEps"),
-            "Dividend Yield": info.get("dividendYield"),
-            "Beta": info.get("beta"),
-            "Profit Margin": info.get("profitMargins"),
-            "ROE": info.get("returnOnEquity"),
-            "Revenue": info.get("totalRevenue"),
-            "Volume": getattr(fi, "three_month_average_volume", None) or info.get("volume"),
-            "Avg Volume": info.get("averageVolume"),
-            "Target Mean": info.get("targetMeanPrice"),
-        },
-        "analyst": {
-            "recommendation": info.get("recommendationKey"),
-            "targetLow": info.get("targetLowPrice"),
-            "targetMean": info.get("targetMeanPrice"),
-            "targetHigh": info.get("targetHighPrice"),
-            "numAnalysts": info.get("numberOfAnalystOpinions"),
-        },
-    }
+        return {
+            "symbol": symbol.upper(),
+            "name": info.get("shortName") or info.get("longName") or symbol.upper(),
+            "exchange": info.get("fullExchangeName") or info.get("exchange") or getattr(fi, "exchange", ""),
+            "currency": currency or info.get("currency", "USD"),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "website": info.get("website"),
+            "summary": info.get("longBusinessSummary"),
+            "price": price,
+            "previousClose": prev,
+            "change": change,
+            "changePct": pct,
+            "dayLow": getattr(fi, "day_low", None),
+            "dayHigh": getattr(fi, "day_high", None),
+            "fiftyTwoWeekLow": getattr(fi, "year_low", None),
+            "fiftyTwoWeekHigh": getattr(fi, "year_high", None),
+            "fundamentals": {
+                "Market Cap": market_cap or info.get("marketCap"),
+                "P/E (TTM)": info.get("trailingPE"),
+                "Forward P/E": info.get("forwardPE"),
+                "EPS (TTM)": info.get("trailingEps"),
+                "Dividend Yield": info.get("dividendYield"),
+                "Beta": info.get("beta"),
+                "Profit Margin": info.get("profitMargins"),
+                "ROE": info.get("returnOnEquity"),
+                "Revenue": info.get("totalRevenue"),
+                "Volume": getattr(fi, "three_month_average_volume", None) or info.get("volume"),
+                "Avg Volume": info.get("averageVolume"),
+                "Target Mean": info.get("targetMeanPrice"),
+            },
+            "analyst": {
+                "recommendation": info.get("recommendationKey"),
+                "targetLow": info.get("targetLowPrice"),
+                "targetMean": info.get("targetMeanPrice"),
+                "targetHigh": info.get("targetHighPrice"),
+                "numAnalysts": info.get("numberOfAnalystOpinions"),
+            },
+        }
+
+    return cached(f"stock:{symbol.upper()}", 60, fetch)
 
 
 @app.get("/api/history/{symbol}")
 def history(symbol: str, range: str = "1M"):
-    period, interval = RANGES.get(range.upper(), RANGES["1M"])
-    df = _ticker(symbol).history(period=period, interval=interval)
-    if df.empty:
-        raise HTTPException(404, f"No price history for '{symbol}'.")
+    def fetch():
+        period, interval = RANGES.get(range.upper(), RANGES["1M"])
+        df = _ticker(symbol).history(period=period, interval=interval)
+        if df.empty:
+            raise HTTPException(404, f"No price history for '{symbol}'.")
 
-    candles = [
-        {
-            "time": int(ts.timestamp()),
-            "open": round(row.Open, 4),
-            "high": round(row.High, 4),
-            "low": round(row.Low, 4),
-            "close": round(row.Close, 4),
-            "volume": int(row.Volume),
-        }
-        for ts, row in df.iterrows()
-    ]
-    return {"symbol": symbol.upper(), "range": range.upper(), "candles": candles}
+        candles = [
+            {
+                "time": int(ts.timestamp()),
+                "open": round(row.Open, 4),
+                "high": round(row.High, 4),
+                "low": round(row.Low, 4),
+                "close": round(row.Close, 4),
+                "volume": int(row.Volume),
+            }
+            for ts, row in df.iterrows()
+        ]
+        return {"symbol": symbol.upper(), "range": range.upper(), "candles": candles}
+
+    return cached(f"history:{symbol.upper()}:{range.upper()}", 300, fetch)
 
 
 @app.get("/api/news/{symbol}")
 def news(symbol: str):
-    items = []
-    try:
-        for n in (_ticker(symbol).news or [])[:8]:
-            content = n.get("content", n)
-            items.append({
-                "title": content.get("title"),
-                "publisher": (content.get("provider") or {}).get("displayName")
-                             or content.get("publisher"),
-                "link": (content.get("canonicalUrl") or {}).get("url")
-                        or content.get("link"),
-            })
-    except Exception:
-        return {"symbol": symbol.upper(), "news": []}
-    return {"symbol": symbol.upper(), "news": [i for i in items if i["title"]]}
+    def fetch():
+        items = []
+        try:
+            for n in (_ticker(symbol).news or [])[:8]:
+                content = n.get("content", n)
+                items.append({
+                    "title": content.get("title"),
+                    "publisher": (content.get("provider") or {}).get("displayName")
+                                 or content.get("publisher"),
+                    "link": (content.get("canonicalUrl") or {}).get("url")
+                            or content.get("link"),
+                })
+        except Exception:
+            return {"symbol": symbol.upper(), "news": []}
+        return {"symbol": symbol.upper(), "news": [i for i in items if i["title"]]}
+
+    return cached(f"news:{symbol.upper()}", 600, fetch)
 
 
 @app.get("/api/health")
