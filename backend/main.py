@@ -1,14 +1,20 @@
 """
 Bourse — backend API.
 
-FastAPI service wrapping Yahoo Finance (yfinance) with curl_cffi
-browser-impersonation to avoid bot-blocking. Exposes clean JSON
-endpoints for the React frontend.
+Core market data (quotes, charts, fundamentals, search) comes from
+Twelve Data — a documented, stable, official API — instead of scraping
+Yahoo Finance. News still comes from yfinance/Yahoo, since that part
+was reliable and Twelve Data's free tier doesn't include news.
+
+Requires a free Twelve Data API key: https://twelvedata.com
+Set it as the TWELVE_DATA_API_KEY environment variable.
 """
 
+import os
 import time
-from functools import lru_cache
+from datetime import datetime, timedelta
 
+import requests
 import yfinance as yf
 from curl_cffi import requests as cffi_requests
 from fastapi import FastAPI, HTTPException
@@ -23,19 +29,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+TD_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
+TD_BASE = "https://api.twelvedata.com"
+
 RANGES = {
-    "1D": ("1d", "5m"),
-    "5D": ("5d", "30m"),
-    "1M": ("1mo", "1d"),
-    "6M": ("6mo", "1d"),
-    "1Y": ("1y", "1d"),
-    "5Y": ("5y", "1wk"),
+    # UI range -> (Twelve Data interval, outputsize)
+    "1D": ("5min", 100),
+    "5D": ("30min", 100),
+    "1M": ("1day", 22),
+    "6M": ("1day", 130),
+    "1Y": ("1day", 260),
+    "5Y": ("1week", 260),
 }
 
+# yfinance session for news only — still needs browser impersonation.
+_yf_session = cffi_requests.Session(impersonate="chrome")
+
+
+def _ticker(symbol: str) -> yf.Ticker:
+    return yf.Ticker(symbol.upper().strip(), session=_yf_session)
+
+
 # --- Simple in-memory TTL cache -------------------------------------------
-# Yahoo's free endpoints rate-limit aggressively. Caching each response for
-# a short window means repeat requests for the same symbol (very common —
-# every reload, every watchlist refresh) don't re-hit Yahoo at all.
 _cache: dict[str, tuple[float, dict]] = {}
 
 
@@ -49,33 +64,27 @@ def cached(key: str, ttl: int, fetch):
     return value
 
 
+def _td_get(path: str, params: dict):
+    if not TD_KEY:
+        raise HTTPException(500, "Server is missing TWELVE_DATA_API_KEY.")
+    params = {**params, "apikey": TD_KEY}
+    resp = requests.get(f"{TD_BASE}/{path}", params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict) and data.get("status") == "error":
+        raise HTTPException(404, data.get("message", f"Twelve Data error for {path}"))
+    return data
+
+
+def _num(v):
+    """Twelve Data returns most numbers as strings — convert safely."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
-
-# Browser-impersonating session — avoids Yahoo's bot detection.
-_session = cffi_requests.Session(impersonate="chrome")
-
-# Yahoo's blocking isn't perfectly consistent across browser signatures,
-# so for the heavier .info call we retry with a couple of different
-# impersonation profiles before giving up.
-_INFO_PROFILES = ["chrome", "chrome124", "safari"]
-
-
-@lru_cache(maxsize=256)
-def _info_with_fallback(symbol: str) -> dict:
-    for profile in _INFO_PROFILES:
-        try:
-            sess = cffi_requests.Session(impersonate=profile)
-            t = yf.Ticker(symbol.upper().strip(), session=sess)
-            info = t.info
-            if info and (info.get("longBusinessSummary") or info.get("trailingPE") or info.get("sector")):
-                return info
-        except Exception:
-            continue
-    return {}
-
-
-def _ticker(symbol: str) -> yf.Ticker:
-    return yf.Ticker(symbol.upper().strip(), session=_session)
 
 
 @app.get("/api/search")
@@ -86,122 +95,130 @@ def search(q: str):
 
     def fetch():
         try:
-            resp = _session.get(
-                "https://query2.finance.yahoo.com/v1/finance/search",
-                params={"q": q, "quotesCount": 8, "newsCount": 0},
-                timeout=8,
-            )
-            resp.raise_for_status()
-            quotes = resp.json().get("quotes", [])
+            data = _td_get("symbol_search", {"symbol": q, "outputsize": 8})
         except Exception:
             return {"results": []}
 
         results = []
-        for item in quotes:
-            symbol = item.get("symbol")
-            if not symbol or item.get("quoteType") not in {"EQUITY", "ETF", "INDEX"}:
+        for item in (data.get("data") or [])[:8]:
+            if item.get("instrument_type") not in {"Common Stock", "ETF", "Index", None}:
                 continue
             results.append({
-                "symbol": symbol,
-                "name": item.get("shortname") or item.get("longname") or symbol,
-                "exchange": item.get("exchDisp", ""),
-                "type": item.get("quoteType", ""),
+                "symbol": item.get("symbol"),
+                "name": item.get("instrument_name") or item.get("symbol"),
+                "exchange": item.get("exchange", ""),
+                "type": item.get("instrument_type", ""),
             })
         return {"results": results}
 
-    return cached(f"search:{q.lower()}", 30, fetch)
+    return cached(f"search:{q.lower()}", 60, fetch)
 
 
 @app.get("/api/stock/{symbol}")
 def stock(symbol: str):
+    sym = symbol.upper().strip()
+
     def fetch():
-        t = _ticker(symbol)
+        quote = _td_get("quote", {"symbol": sym})
 
-        # fast_info hits a lighter Yahoo endpoint — much less likely to be blocked.
+        price = _num(quote.get("close"))
+        prev = _num(quote.get("previous_close"))
+        if price is None:
+            raise HTTPException(404, f"No data found for '{sym}'. Check the ticker.")
+
+        change = _num(quote.get("change"))
+        pct = _num(quote.get("percent_change"))
+        if change is None and price is not None and prev is not None:
+            change = price - prev
+        if pct is None and change is not None and prev:
+            pct = (change / prev) * 100
+
+        fifty_two = quote.get("fifty_two_week") or {}
+
+        # Fundamentals are best-effort — wrapped so a failure here never
+        # breaks the price/chart the user actually came for.
+        val, fin, stats = {}, {}, {}
         try:
-            fi = t.fast_info
-            price = fi.last_price
-            prev = fi.previous_close
-            currency = fi.currency
-            market_cap = getattr(fi, "market_cap", None)
-        except Exception as e:
-            raise HTTPException(404, f"Could not fetch data for '{symbol}': {e}")
-
-        if not price:
-            raise HTTPException(404, f"No data found for '{symbol}'. Check the ticker.")
-
-        change = (price - prev) if (price and prev) else None
-        pct = (change / prev * 100) if (change is not None and prev) else None
-
-        # .info has richer fundamentals but hits a heavier, more-blocked endpoint.
-        # Try a few browser signatures before giving up gracefully.
-        info = _info_with_fallback(symbol)
+            s = _td_get("statistics", {"symbol": sym}).get("statistics", {})
+            val = s.get("valuations_metrics", {}) or {}
+            fin = s.get("financials", {}) or {}
+            stats = s.get("stock_statistics", {}) or {}
+        except Exception:
+            pass
 
         return {
-            "symbol": symbol.upper(),
-            "name": info.get("shortName") or info.get("longName") or symbol.upper(),
-            "exchange": info.get("fullExchangeName") or info.get("exchange") or getattr(fi, "exchange", ""),
-            "currency": currency or info.get("currency", "USD"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "website": info.get("website"),
-            "summary": info.get("longBusinessSummary"),
+            "symbol": sym,
+            "name": quote.get("name") or sym,
+            "exchange": quote.get("exchange", ""),
+            "currency": quote.get("currency", "USD"),
+            "sector": None,
+            "industry": None,
+            "website": None,
+            "summary": None,
             "price": price,
             "previousClose": prev,
             "change": change,
             "changePct": pct,
-            "dayLow": getattr(fi, "day_low", None),
-            "dayHigh": getattr(fi, "day_high", None),
-            "fiftyTwoWeekLow": getattr(fi, "year_low", None),
-            "fiftyTwoWeekHigh": getattr(fi, "year_high", None),
+            "dayLow": _num(quote.get("low")),
+            "dayHigh": _num(quote.get("high")),
+            "fiftyTwoWeekLow": _num(fifty_two.get("low")),
+            "fiftyTwoWeekHigh": _num(fifty_two.get("high")),
             "fundamentals": {
-                "Market Cap": market_cap or info.get("marketCap"),
-                "P/E (TTM)": info.get("trailingPE"),
-                "Forward P/E": info.get("forwardPE"),
-                "EPS (TTM)": info.get("trailingEps"),
-                "Dividend Yield": info.get("dividendYield"),
-                "Beta": info.get("beta"),
-                "Profit Margin": info.get("profitMargins"),
-                "ROE": info.get("returnOnEquity"),
-                "Revenue": info.get("totalRevenue"),
-                "Volume": getattr(fi, "three_month_average_volume", None) or info.get("volume"),
-                "Avg Volume": info.get("averageVolume"),
-                "Target Mean": info.get("targetMeanPrice"),
+                "Market Cap": _num(val.get("market_capitalization")),
+                "P/E (TTM)": _num(val.get("trailing_pe")),
+                "Forward P/E": _num(val.get("forward_pe")),
+                "EPS (TTM)": _num((fin.get("income_statement") or {}).get("diluted_eps_ttm")),
+                "Dividend Yield": _num(stats.get("trailing_annual_dividend_yield")),
+                "Beta": _num(stats.get("beta")),
+                "Profit Margin": _num(fin.get("profit_margin")),
+                "ROE": _num(fin.get("return_on_equity_ttm")),
+                "Revenue": _num((fin.get("income_statement") or {}).get("revenue_ttm")),
+                "Volume": _num(quote.get("volume")),
+                "Avg Volume": _num(quote.get("average_volume")),
+                "Target Mean": None,
             },
             "analyst": {
-                "recommendation": info.get("recommendationKey"),
-                "targetLow": info.get("targetLowPrice"),
-                "targetMean": info.get("targetMeanPrice"),
-                "targetHigh": info.get("targetHighPrice"),
-                "numAnalysts": info.get("numberOfAnalystOpinions"),
+                "recommendation": None,
+                "targetLow": None,
+                "targetMean": None,
+                "targetHigh": None,
+                "numAnalysts": None,
             },
         }
 
-    return cached(f"stock:{symbol.upper()}", 60, fetch)
+    return cached(f"stock:{sym}", 60, fetch)
 
 
 @app.get("/api/history/{symbol}")
 def history(symbol: str, range: str = "1M"):
+    sym = symbol.upper().strip()
+    interval, outputsize = RANGES.get(range.upper(), RANGES["1M"])
+
     def fetch():
-        period, interval = RANGES.get(range.upper(), RANGES["1M"])
-        df = _ticker(symbol).history(period=period, interval=interval)
-        if df.empty:
-            raise HTTPException(404, f"No price history for '{symbol}'.")
+        data = _td_get("time_series", {
+            "symbol": sym, "interval": interval, "outputsize": outputsize,
+        })
+        values = data.get("values") or []
+        if not values:
+            raise HTTPException(404, f"No price history for '{sym}'.")
 
-        candles = [
-            {
-                "time": int(ts.timestamp()),
-                "open": round(row.Open, 4),
-                "high": round(row.High, 4),
-                "low": round(row.Low, 4),
-                "close": round(row.Close, 4),
-                "volume": int(row.Volume),
-            }
-            for ts, row in df.iterrows()
-        ]
-        return {"symbol": symbol.upper(), "range": range.upper(), "candles": candles}
+        candles = []
+        for v in reversed(values):  # Twelve Data returns newest-first
+            try:
+                dt = datetime.strptime(v["datetime"], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                dt = datetime.strptime(v["datetime"], "%Y-%m-%d")
+            candles.append({
+                "time": int(dt.timestamp()),
+                "open": round(_num(v["open"]), 4),
+                "high": round(_num(v["high"]), 4),
+                "low": round(_num(v["low"]), 4),
+                "close": round(_num(v["close"]), 4),
+                "volume": int(_num(v.get("volume")) or 0),
+            })
+        return {"symbol": sym, "range": range.upper(), "candles": candles}
 
-    return cached(f"history:{symbol.upper()}:{range.upper()}", 300, fetch)
+    return cached(f"history:{sym}:{range.upper()}", 300, fetch)
 
 
 @app.get("/api/news/{symbol}")
@@ -227,4 +244,4 @@ def news(symbol: str):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "twelveDataConfigured": bool(TD_KEY)}
