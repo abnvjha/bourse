@@ -82,12 +82,12 @@ export default function CompareTickerInput({ onAdd, exclude = [] }) {
         className="w-28 rounded-md border border-term-border bg-term-bg px-2 py-1 font-mono text-xs outline-none focus:border-term-accent"
       />
       {open && loading && (
-        <div className="absolute left-0 z-20 mt-2 w-64 rounded-xl border border-term-border bg-term-panel px-3 py-2 text-xs text-term-muted shadow-2xl shadow-black/50">
+        <div className="absolute left-0 z-20 mt-2 w-[85vw] max-w-64 rounded-xl border border-term-border bg-term-panel px-3 py-2 text-xs text-term-muted shadow-2xl shadow-black/50">
           Searching…
         </div>
       )}
       {open && !loading && results.length > 0 && (
-        <ul className="absolute left-0 z-20 mt-2 max-h-64 w-64 overflow-auto rounded-xl border border-term-border bg-term-panel py-1 shadow-2xl shadow-black/50">
+        <ul className="absolute left-0 z-20 mt-2 max-h-64 w-[85vw] max-w-64 overflow-auto rounded-xl border border-term-border bg-term-panel py-1 shadow-2xl shadow-black/50">
           {results.map((r, i) => (
             <li key={r.symbol}>
               <button

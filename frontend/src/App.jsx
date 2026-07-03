@@ -166,29 +166,29 @@ export default function App() {
     <div className="min-h-screen bg-term-bg text-current">
       {/* ---- Top bar ---- */}
       <header className="sticky top-0 z-10 border-b border-term-border bg-term-bg/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-6 py-3">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3 sm:gap-4 sm:px-6">
           <button
             onClick={() => setSymbol(null)}
-            className="flex items-center gap-2 text-lg font-black uppercase tracking-tight transition hover:opacity-80"
+            className="flex items-center gap-2 text-base font-black uppercase tracking-tight transition hover:opacity-80 sm:text-lg"
           >
             Bourse<span className="text-term-accent">.</span>
           </button>
           <button
             onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-            className="ml-2 rounded-lg border border-term-border px-3 py-1.5 text-xs text-term-muted transition hover:text-current"
+            className="rounded-lg border border-term-border px-2.5 py-1.5 text-xs text-term-muted transition hover:text-current sm:ml-2 sm:px-3"
             title="Toggle theme"
           >
             {theme === "dark" ? "☀ Light" : "☾ Dark"}
           </button>
           {symbol && (
-            <div className="ml-auto">
+            <div className="order-last w-full sm:order-none sm:ml-auto sm:w-auto">
               <SearchBox onSelect={selectSymbol} recents={recents} onClearRecents={() => setRecents([])} />
             </div>
           )}
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-6">
+      <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
         {/* ---- Watchlist strip (shown on both the homepage and the dashboard) ---- */}
         {watchlist.length > 0 && (
           <div className="mb-6 flex gap-3 overflow-x-auto pb-1">
@@ -199,7 +199,7 @@ export default function App() {
                 <button
                   key={s}
                   onClick={() => selectSymbol(s)}
-                  className={`flex shrink-0 flex-col items-start rounded-xl border-2 px-4 py-2 text-left transition ${
+                  className={`flex shrink-0 flex-col items-start rounded-xl border-2 px-3 py-2 text-left transition sm:px-4 ${
                     s === symbol
                       ? "border-term-accent bg-term-accent/10"
                       : "border-term-border bg-term-panel hover:border-term-accent/50"
@@ -238,7 +238,7 @@ export default function App() {
             {stock && (
               <div className="space-y-6">
                 {/* ---- Header: name, price, change ---- */}
-                <section className="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-term-border bg-term-panel p-6">
+                <section className="flex flex-col gap-4 rounded-xl border border-term-border bg-term-panel p-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:p-6">
                   <div>
                 <div className="flex items-center gap-3">
                   <button
@@ -250,7 +250,7 @@ export default function App() {
                   >
                     {isWatched ? "★" : "☆"}
                   </button>
-                  <h1 className="font-mono text-2xl font-bold">{stock.symbol}</h1>
+                  <h1 className="font-mono text-xl font-bold sm:text-2xl">{stock.symbol}</h1>
                   <span className="rounded-md bg-term-bg px-2 py-0.5 text-xs text-term-muted">
                     {stock.exchange}
                   </span>
@@ -262,23 +262,23 @@ export default function App() {
                   </p>
                 )}
               </div>
-              <div className="text-right">
-                <div className="font-mono text-4xl font-black tabular-nums">
+              <div className="text-left sm:text-right">
+                <div className="font-mono text-3xl font-black tabular-nums sm:text-4xl">
                   {money(stock.price, stock.currency)}
                 </div>
-                <div className={`mt-1 font-mono text-lg font-bold tabular-nums ${accent}`}>
+                <div className={`mt-1 font-mono text-base font-bold tabular-nums sm:text-lg ${accent}`}>
                   {up ? "▲" : "▼"} {money(Math.abs(stock.change), stock.currency)} ({percent(stock.changePct)})
                 </div>
               </div>
             </section>
 
             {/* ---- Chart with range selector + compare mode ---- */}
-            <section className="rounded-xl border border-term-border bg-term-panel p-6">
+            <section className="rounded-xl border border-term-border bg-term-panel p-4 sm:p-6">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h2 className="font-mono text-sm uppercase tracking-wider text-term-muted">
                   {compareMode ? "Compare" : "Price"}
                 </h2>
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
                   <button
                     onClick={() => setCompareMode((v) => !v)}
                     className={`rounded-lg border px-3 py-1.5 font-mono text-xs transition ${
@@ -289,12 +289,12 @@ export default function App() {
                   >
                     Compare
                   </button>
-                  <div className="flex gap-1 rounded-lg bg-term-bg p-1">
+                  <div className="flex flex-1 gap-1 overflow-x-auto rounded-lg bg-term-bg p-1 sm:flex-none">
                     {RANGES.map((r) => (
                       <button
                         key={r}
                         onClick={() => setRange(r)}
-                        className={`rounded-md px-3 py-1 font-mono text-xs transition ${
+                        className={`shrink-0 rounded-md px-3 py-1 font-mono text-xs transition ${
                           range === r
                             ? "bg-term-accent text-white"
                             : "text-term-muted hover:text-current"
@@ -328,7 +328,9 @@ export default function App() {
                     </span>
                   ))}
                   {compareSymbols.length < MAX_COMPARE - 1 && (
-                    <CompareTickerInput onAdd={addCompare} exclude={[symbol, ...compareSymbols]} />
+                    <div className="w-full sm:w-auto">
+                      <CompareTickerInput onAdd={addCompare} exclude={[symbol, ...compareSymbols]} />
+                    </div>
                   )}
                 </div>
               )}
@@ -337,30 +339,30 @@ export default function App() {
                 compareSeries.some((s) => s.candles.length > 0) ? (
                   <CompareChart series={compareSeries} theme={theme} />
                 ) : (
-                  <div className="flex h-[420px] items-center justify-center text-term-muted">
+                  <div className="flex h-[280px] items-center justify-center text-term-muted sm:h-[420px]">
                     Add a ticker above to compare
                   </div>
                 )
               ) : candles.length > 0 ? (
                 <PriceChart candles={candles} theme={theme} />
               ) : (
-                <div className="flex h-[420px] items-center justify-center text-term-muted">
+                <div className="flex h-[280px] items-center justify-center text-term-muted sm:h-[420px]">
                   No chart data
                 </div>
               )}
             </section>
 
             {/* ---- Fundamentals + Analyst ---- */}
-            <div className="grid gap-6 lg:grid-cols-3">
-              <section className="lg:col-span-2 rounded-xl border border-term-border bg-term-panel p-6">
+            <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
+              <section className="lg:col-span-2 rounded-xl border border-term-border bg-term-panel p-4 sm:p-6">
                 <h2 className="mb-4 font-mono text-sm uppercase tracking-wider text-term-muted">
                   Key Statistics
                 </h2>
                 <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-term-border sm:grid-cols-3">
                   {Object.entries(stock.fundamentals).map(([label, value]) => (
-                    <div key={label} className="bg-term-panel p-4">
+                    <div key={label} className="bg-term-panel p-3 sm:p-4">
                       <div className="text-xs text-term-muted">{label}</div>
-                      <div className="mt-1 font-mono text-lg font-semibold">
+                      <div className="mt-1 font-mono text-base font-semibold sm:text-lg">
                         {RATIO_KEYS.has(label)
                           ? ratioPercent(value)
                           : BIG_KEYS.has(label)
@@ -376,8 +378,8 @@ export default function App() {
             </div>
 
             {/* ---- News + Summary ---- */}
-            <div className="grid gap-6 lg:grid-cols-3">
-              <section className="lg:col-span-2 rounded-xl border border-term-border bg-term-panel p-6">
+            <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
+              <section className="lg:col-span-2 rounded-xl border border-term-border bg-term-panel p-4 sm:p-6">
                 <h2 className="mb-4 font-mono text-sm uppercase tracking-wider text-term-muted">
                   Latest News
                 </h2>
@@ -406,7 +408,7 @@ export default function App() {
                 </ul>
               </section>
 
-              <section className="rounded-xl border border-term-border bg-term-panel p-6">
+              <section className="rounded-xl border border-term-border bg-term-panel p-4 sm:p-6">
                 <h2 className="mb-4 font-mono text-sm uppercase tracking-wider text-term-muted">
                   About
                 </h2>
@@ -453,7 +455,7 @@ function AnalystPanel({ analyst, price, currency }) {
   const pos = (v) => ((v - targetLow) / (targetHigh - targetLow)) * 100;
 
   return (
-    <section className="rounded-xl border border-term-border bg-term-panel p-6">
+    <section className="rounded-xl border border-term-border bg-term-panel p-4 sm:p-6">
       <h2 className="mb-4 font-mono text-sm uppercase tracking-wider text-term-muted">
         Analyst Targets
       </h2>

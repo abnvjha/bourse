@@ -23,13 +23,13 @@ export default function Landing({ onSelect, recents, onClearRecents }) {
   return (
     <div>
       <section
-        className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center transition-opacity"
+        className="flex min-h-[60vh] flex-col items-center justify-center px-4 text-center transition-opacity sm:px-6"
         style={{ opacity: fade, transform: `translateY(-${shift}px)` }}
       >
-        <h1 className="font-display text-5xl font-extrabold tracking-tight sm:text-6xl">
+        <h1 className="font-display text-4xl font-extrabold tracking-tight sm:text-6xl">
           Bourse<span className="text-term-accent">.</span>
         </h1>
-        <p className="font-display mt-4 max-w-md text-lg font-semibold text-term-muted">
+        <p className="font-display mt-4 max-w-md text-base font-semibold text-term-muted sm:text-lg">
           Live prices, candlestick charts, analyst targets, and news — for any stock, anywhere in the
           world.
         </p>
@@ -39,21 +39,21 @@ export default function Landing({ onSelect, recents, onClearRecents }) {
           covering markets from the US and India to London, Tokyo, and beyond.
         </p>
 
-        <div className="mt-8 flex justify-center">
+        <div className="mt-8 flex w-full justify-center px-2 sm:w-auto sm:px-0">
           <SearchBox onSelect={onSelect} recents={recents} onClearRecents={onClearRecents} />
         </div>
       </section>
 
-      <section className="mx-auto max-w-3xl px-6 pb-24">
+      <section className="mx-auto max-w-3xl px-4 pb-16 sm:px-6 sm:pb-24">
         <h2 className="mb-4 text-center font-mono text-xs uppercase tracking-wider text-term-muted">
           Popular right now
         </h2>
-        <div className="flex flex-wrap justify-center gap-3">
+        <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
           {QUICK_PICKS.map((s) => (
             <button
               key={s}
               onClick={() => onSelect(s)}
-              className="rounded-xl border border-term-border bg-term-panel px-5 py-3 font-mono text-sm font-semibold transition hover:border-term-accent hover:text-term-accent"
+              className="rounded-xl border border-term-border bg-term-panel px-4 py-2.5 font-mono text-sm font-semibold transition hover:border-term-accent hover:text-term-accent sm:px-5 sm:py-3"
             >
               {s}
             </button>

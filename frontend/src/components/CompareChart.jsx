@@ -57,5 +57,5 @@ export default function CompareChart({ series, theme = "dark" }) {
     return () => chart.remove();
   }, [series, theme]);
 
-  return <div ref={containerRef} className="h-[420px] w-full" />;
+  return <div ref={containerRef} className="h-[280px] w-full sm:h-[420px]" />;
 }

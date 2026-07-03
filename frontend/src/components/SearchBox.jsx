@@ -85,7 +85,7 @@ export default function SearchBox({ onSelect, recents = [], onClearRecents }) {
   };
 
   return (
-    <div ref={boxRef} className="relative w-72">
+    <div ref={boxRef} className="relative w-full sm:w-72">
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -100,13 +100,13 @@ export default function SearchBox({ onSelect, recents = [], onClearRecents }) {
       )}
 
       {open && loading && query.trim().length > 0 && (
-        <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-term-border bg-term-panel px-4 py-3 text-sm text-term-muted shadow-2xl shadow-black/50">
+        <div className="absolute left-0 right-0 z-20 mt-2 w-auto rounded-xl border border-term-border bg-term-panel px-4 py-3 text-sm text-term-muted shadow-2xl shadow-black/50 sm:left-auto sm:right-0 sm:w-80">
           Searching…
         </div>
       )}
 
       {open && !loading && !showingRecents && results.length > 0 && (
-        <ul className="absolute right-0 z-20 mt-2 max-h-80 w-80 overflow-auto rounded-xl border border-term-border bg-term-panel py-1 shadow-2xl shadow-black/50">
+        <ul className="absolute left-0 right-0 z-20 mt-2 max-h-80 w-auto overflow-auto rounded-xl border border-term-border bg-term-panel py-1 shadow-2xl shadow-black/50 sm:left-auto sm:right-0 sm:w-80">
           {results.map((r, i) => (
             <li key={r.symbol}>
               <button
@@ -130,13 +130,13 @@ export default function SearchBox({ onSelect, recents = [], onClearRecents }) {
       )}
 
       {open && !loading && query.trim().length > 0 && results.length === 0 && (
-        <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-term-border bg-term-panel px-4 py-3 text-sm text-term-muted shadow-2xl shadow-black/50">
+        <div className="absolute left-0 right-0 z-20 mt-2 w-auto rounded-xl border border-term-border bg-term-panel px-4 py-3 text-sm text-term-muted shadow-2xl shadow-black/50 sm:left-auto sm:right-0 sm:w-80">
           No matches for "{query.trim()}"
         </div>
       )}
 
       {open && showingRecents && (
-        <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-xl border border-term-border bg-term-panel shadow-2xl shadow-black/50">
+        <div className="absolute left-0 right-0 z-20 mt-2 w-auto overflow-hidden rounded-xl border border-term-border bg-term-panel shadow-2xl shadow-black/50 sm:left-auto sm:right-0 sm:w-80">
           <div className="flex items-center justify-between px-4 py-2.5">
             <span className="text-xs uppercase tracking-wider text-term-muted">Recent</span>
             {recents.length > 0 && (

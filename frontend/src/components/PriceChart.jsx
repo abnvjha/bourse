@@ -81,5 +81,5 @@ export default function PriceChart({ candles, theme = "dark" }) {
     return () => chart.remove();
   }, [candles, theme]);
 
-  return <div ref={containerRef} className="h-[420px] w-full" />;
+  return <div ref={containerRef} className="h-[280px] w-full sm:h-[420px]" />;
 }
