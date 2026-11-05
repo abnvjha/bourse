@@ -20,27 +20,36 @@ export default function SearchBox({ onSelect, recents = [], onClearRecents }) {
   const [loading, setLoading] = useState(false);
   const boxRef = useRef(null);
 
-  // Debounced search: wait 250ms after the user stops typing.
+  // Debounced search: wait briefly after the user stops typing, and cancel
+  // any older query so a slow response cannot replace newer results.
   useEffect(() => {
     const q = query.trim();
     if (q.length < 1) {
       setResults([]);
+      setLoading(false);
       return;
     }
+    const controller = new AbortController();
     setLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+        const response = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal });
+        const res = await response.json();
+        if (!response.ok) throw new Error(res.detail || "Search failed.");
+        if (controller.signal.aborted) return;
         setResults(res.results || []);
         setActive(0);
         setOpen(true);
       } catch {
-        setResults([]);
+        if (!controller.signal.aborted) setResults([]);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
-    }, 250);
-    return () => clearTimeout(timer);
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
 
   // Close the dropdown when clicking outside the box.
@@ -108,7 +117,7 @@ export default function SearchBox({ onSelect, recents = [], onClearRecents }) {
       {open && !loading && !showingRecents && results.length > 0 && (
         <ul className="absolute left-0 right-0 z-20 mt-2 max-h-80 w-auto overflow-auto rounded-xl border border-term-border bg-term-panel py-1 shadow-2xl shadow-black/50 sm:left-auto sm:right-0 sm:w-80">
           {results.map((r, i) => (
-            <li key={r.symbol}>
+            <li key={`${r.symbol}-${r.exchange}`}>
               <button
                 onMouseEnter={() => setActive(i)}
                 onClick={() => choose(r.symbol)}

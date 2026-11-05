@@ -44,6 +44,26 @@ RANGES = {
     "5Y": ("1week", 260),
 }
 
+# Keep the exchange context when converting Twelve Data search results into
+# user-facing ticker symbols. Twelve Data expects the bare symbol plus exchange.
+SUFFIX_TO_EXCHANGE = {
+    ".NS": "NSE",
+    ".BO": "BSE",
+    ".L": "LSE",
+    ".T": "TSE",
+    ".DE": "XETR",
+    ".HK": "HKEX",
+    ".TO": "TSX",
+}
+
+
+def _provider_symbol(symbol: str) -> dict:
+    sym = symbol.upper().strip()
+    for suffix, exchange in SUFFIX_TO_EXCHANGE.items():
+        if sym.endswith(suffix):
+            return {"symbol": sym[:-len(suffix)], "exchange": exchange}
+    return {"symbol": sym}
+
 # yfinance session for news only — still needs browser impersonation.
 _yf_session = cffi_requests.Session(impersonate="chrome", timeout=8)
 
@@ -135,10 +155,17 @@ def search(q: str):
         for item in (data.get("data") or [])[:8]:
             if item.get("instrument_type") not in {"Common Stock", "ETF", "Index", None}:
                 continue
+            symbol = item.get("symbol")
+            exchange = item.get("exchange", "")
+            if symbol and not any(symbol.upper().endswith(s) for s in SUFFIX_TO_EXCHANGE):
+                if exchange == "NSE":
+                    symbol += ".NS"
+                elif exchange == "BSE":
+                    symbol += ".BO"
             results.append({
-                "symbol": item.get("symbol"),
+                "symbol": symbol,
                 "name": item.get("instrument_name") or item.get("symbol"),
-                "exchange": item.get("exchange", ""),
+                "exchange": exchange,
                 "type": item.get("instrument_type", ""),
             })
         return {"results": results}
@@ -154,9 +181,9 @@ def stock(symbol: str):
         # Fundamentals are optional and can be much slower than the live quote.
         # Fetch them concurrently, then cap how long they can delay the snapshot.
         stats_future = _upstream_pool.submit(
-            _td_get, "statistics", {"symbol": sym}
+            _td_get, "statistics", _provider_symbol(sym)
         )
-        quote = _td_get("quote", {"symbol": sym})
+        quote = _td_get("quote", _provider_symbol(sym))
 
         price = _num(quote.get("close"))
         prev = _num(quote.get("previous_close"))
@@ -233,7 +260,7 @@ def history(symbol: str, range: str = "1M"):
 
     def fetch():
         data = _td_get("time_series", {
-            "symbol": sym, "interval": interval, "outputsize": outputsize,
+            **_provider_symbol(sym), "interval": interval, "outputsize": outputsize,
         })
         values = data.get("values") or []
         if not values:
