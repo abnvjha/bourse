@@ -33,6 +33,9 @@ export default function App() {
   const [news, setNews] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState(null);
+  const [newsLoading, setNewsLoading] = useState(false);
 
   // ---- Theme ----
   const [theme, setTheme] = useState(() => readLocal("st_theme", "dark"));
@@ -118,38 +121,82 @@ export default function App() {
   const removeCompare = (sym) => setCompareSymbols((prev) => prev.filter((s) => s !== sym));
 
   // ---- Load main stock data ----
-  const load = useCallback(async (sym, rng) => {
+  const load = useCallback(async (sym, rng, signal) => {
     setLoading(true);
     setError(null);
-    try {
-      const [s, h, n] = await Promise.all([
-        fetch(`${API_BASE}/api/stock/${sym}`).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(`${API_BASE}/api/history/${sym}?range=${rng}`).then((r) => (r.ok ? r.json() : Promise.reject(r))),
-        fetch(`${API_BASE}/api/news/${sym}`).then((r) => (r.ok ? r.json() : { news: [] })),
-      ]);
-      setStock(s);
-      setCandles(h.candles);
-      setNews(n.news);
-      addRecent(sym);
-    } catch (e) {
-      const detail = e.json ? (await e.json().catch(() => null))?.detail : null;
-      setError(detail || `Couldn't load "${sym}". Check the ticker symbol.`);
-      setStock(null);
-      setCandles([]);
-      setNews([]);
-    } finally {
+    setChartLoading(true);
+    setChartError(null);
+    setNewsLoading(true);
+
+    const getJson = async (url) => {
+      let timeoutId;
+      const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("The data service took too long to respond.")), 20000);
+      });
+      try {
+        const response = await Promise.race([fetch(url, { signal }), timeout]);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.detail || `Request failed (${response.status})`);
+        }
+        return data;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const quoteRequest = getJson(`${API_BASE}/api/stock/${encodeURIComponent(sym)}`);
+    const chartRequest = getJson(`${API_BASE}/api/history/${encodeURIComponent(sym)}?range=${encodeURIComponent(rng)}`);
+    const newsRequest = getJson(`${API_BASE}/api/news/${encodeURIComponent(sym)}`);
+
+    quoteRequest.then((data) => {
+      if (signal.aborted) return;
+      setStock(data);
+      setError(null);
       setLoading(false);
-    }
+      addRecent(sym);
+    }).catch((e) => {
+      if (signal.aborted) return;
+      setError(e.message || `Couldn't load "${sym}". Check the ticker symbol.`);
+      setStock(null);
+      setLoading(false);
+    });
+
+    chartRequest.then((data) => {
+      if (signal.aborted) return;
+      setCandles(Array.isArray(data.candles) ? data.candles : []);
+      setChartError(null);
+    }).catch((e) => {
+      if (signal.aborted) return;
+      setCandles([]);
+      setChartError(e.message || "Chart data is temporarily unavailable.");
+    }).finally(() => {
+      if (!signal.aborted) setChartLoading(false);
+    });
+
+    newsRequest.then((data) => {
+      if (!signal.aborted) setNews(Array.isArray(data.news) ? data.news : []);
+    }).catch(() => {
+      if (!signal.aborted) setNews([]);
+    }).finally(() => {
+      if (!signal.aborted) setNewsLoading(false);
+    });
   }, []);
 
   useEffect(() => {
     if (!symbol) return;
-    load(symbol, range);
+    const controller = new AbortController();
+    load(symbol, range, controller.signal);
+    return () => controller.abort();
   }, [symbol, range, load]);
 
   const selectSymbol = (sym) => {
     setCompareMode(false);
     setCompareSymbols([]);
+    setStock(null);
+    setCandles([]);
+    setNews([]);
+    setError(null);
     setSymbol(sym);
   };
 
@@ -343,6 +390,14 @@ export default function App() {
                     Add a ticker above to compare
                   </div>
                 )
+              ) : chartLoading ? (
+                <div className="flex h-[280px] items-center justify-center text-term-muted sm:h-[420px]">
+                  Loading chart…
+                </div>
+              ) : chartError ? (
+                <div className="flex h-[280px] items-center justify-center px-6 text-center text-term-muted sm:h-[420px]">
+                  Chart unavailable: {chartError}
+                </div>
               ) : candles.length > 0 ? (
                 <PriceChart candles={candles} theme={theme} />
               ) : (
@@ -383,7 +438,8 @@ export default function App() {
                 <h2 className="mb-4 font-mono text-sm uppercase tracking-wider text-term-muted">
                   Latest News
                 </h2>
-                {news.length === 0 && <p className="text-term-muted">No recent news.</p>}
+                {newsLoading && news.length === 0 && <p className="text-term-muted">Loading news…</p>}
+                {!newsLoading && news.length === 0 && <p className="text-term-muted">No recent news.</p>}
                 <ul className="space-y-3">
                   {news.map((n, i) => (
                     <li key={i}>

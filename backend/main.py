@@ -12,7 +12,9 @@ Set it as the TWELVE_DATA_API_KEY environment variable.
 
 import os
 import time
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from threading import Lock
 
 import requests
 import yfinance as yf
@@ -43,7 +45,7 @@ RANGES = {
 }
 
 # yfinance session for news only — still needs browser impersonation.
-_yf_session = cffi_requests.Session(impersonate="chrome")
+_yf_session = cffi_requests.Session(impersonate="chrome", timeout=8)
 
 
 def _ticker(symbol: str) -> yf.Ticker:
@@ -52,15 +54,41 @@ def _ticker(symbol: str) -> yf.Ticker:
 
 # --- Simple in-memory TTL cache -------------------------------------------
 _cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = Lock()
+_refreshing: set[str] = set()
+_upstream_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="bourse-upstream")
 
 
-def cached(key: str, ttl: int, fetch):
-    now = time.time()
-    hit = _cache.get(key)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+def _refresh_cache(key: str, fetch):
+    try:
+        value = fetch()
+        with _cache_lock:
+            _cache[key] = (time.monotonic(), value)
+    except Exception:
+        # Keep the last good response when an upstream provider is flaky.
+        pass
+    finally:
+        with _cache_lock:
+            _refreshing.discard(key)
+
+
+def cached(key: str, ttl: int, fetch, stale_ttl: int = 3600):
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit:
+            age = now - hit[0]
+            if age < ttl:
+                return hit[1]
+            if age < ttl + stale_ttl:
+                if key not in _refreshing:
+                    _refreshing.add(key)
+                    _upstream_pool.submit(_refresh_cache, key, fetch)
+                return hit[1]
+
     value = fetch()
-    _cache[key] = (now, value)
+    with _cache_lock:
+        _cache[key] = (time.monotonic(), value)
     return value
 
 
@@ -68,8 +96,12 @@ def _td_get(path: str, params: dict):
     if not TD_KEY:
         raise HTTPException(500, "Server is missing TWELVE_DATA_API_KEY.")
     params = {**params, "apikey": TD_KEY}
-    resp = requests.get(f"{TD_BASE}/{path}", params=params, timeout=10)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(f"{TD_BASE}/{path}", params=params, timeout=(3, 7))
+    except requests.RequestException as exc:
+        raise HTTPException(502, "Market data provider is temporarily unavailable.") from exc
+    if not resp.ok:
+        raise HTTPException(502, f"Market data provider returned HTTP {resp.status_code}.")
     data = resp.json()
     if isinstance(data, dict) and data.get("status") == "error":
         raise HTTPException(404, data.get("message", f"Twelve Data error for {path}"))
@@ -119,6 +151,11 @@ def stock(symbol: str):
     sym = symbol.upper().strip()
 
     def fetch():
+        # Fundamentals are optional and can be much slower than the live quote.
+        # Fetch them concurrently, then cap how long they can delay the snapshot.
+        stats_future = _upstream_pool.submit(
+            _td_get, "statistics", {"symbol": sym}
+        )
         quote = _td_get("quote", {"symbol": sym})
 
         price = _num(quote.get("close"))
@@ -139,7 +176,7 @@ def stock(symbol: str):
         # breaks the price/chart the user actually came for.
         val, fin, stats = {}, {}, {}
         try:
-            s = _td_get("statistics", {"symbol": sym}).get("statistics", {})
+            s = stats_future.result(timeout=1.25).get("statistics", {})
             val = s.get("valuations_metrics", {}) or {}
             fin = s.get("financials", {}) or {}
             stats = s.get("stock_statistics", {}) or {}
