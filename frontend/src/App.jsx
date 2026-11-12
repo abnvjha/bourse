@@ -77,7 +77,7 @@ function formatStat(label, value, currency) {
 
 export default function App() {
   const [symbol, setSymbol] = useState(null);
-  const [range, setRange] = useState("1M");
+  const [range, setRange] = useState("1Y");
   const [stock, setStock] = useState(null);
   const [profile, setProfile] = useState(null);
   const [candles, setCandles] = useState([]);
